@@ -146,7 +146,7 @@ end_date = st.sidebar.date_input("初期表示 終了日", value=datetime.today(
 st.sidebar.markdown("---")
 st.sidebar.subheader("データ取得設定")
 st.sidebar.caption("※通常はJEPX公式サイトから自動取得するため操作不要です。自動取得に失敗する場合のみ、スマホやPCからCSVをアップロードしてください。")
-uploaded_file = st.sidebar.file_uploader("手動アップロード (任意)", type=["csv"])
+uploaded_file = st.sidebar.file_uploader("手動アップロード (任意)")
 
 if start_date <= end_date:
     with st.spinner("市場データを取得中...（ズームアウト用の過去データも含めて読み込んでいます）"):
