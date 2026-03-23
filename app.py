@@ -10,6 +10,20 @@ from plotly.subplots import make_subplots
 # --- 設定 ---
 st.set_page_config(page_title="JEPX & Imbalance Market Viewer", layout="wide")
 
+# 【追加】スマホ画面いっぱいに表示するためのCSS
+st.markdown("""
+    <style>
+    /* Streamlitのデフォルトの余白を消して画面幅を最大限使う */
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 0.2rem !important;
+        padding-right: 0.2rem !important;
+        max-width: 100% !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 AREAS = ["北海道", "東北", "東京", "中部", "北陸", "関西", "中国", "四国", "九州"]
 
 # --- データ取得関数 ---
@@ -86,7 +100,6 @@ def process_spot_df(df):
 @st.cache_data(ttl=3600)
 def get_spot_data(target_year, uploaded_bytes=None):
     """JEPX公式サイトから直接CSVを取得するか、アップロードされたデータを利用する"""
-    # 1. ユーザーからの手動アップロードがあればそれを最優先
     if uploaded_bytes is not None:
         try:
             df = pd.read_csv(io.BytesIO(uploaded_bytes), encoding='cp932')
@@ -95,7 +108,6 @@ def get_spot_data(target_year, uploaded_bytes=None):
             st.error(f"アップロードされたファイルの読み込みに失敗しました: {e}")
             return None
 
-    # 2. JEPX公式サイトからの自動取得をトライ
     urls = [
         f"https://www.jepx.jp/market/excel/spot_summary_{target_year}.csv",
         f"https://www.jepx.org/market/excel/spot_summary_{target_year}.csv",
@@ -111,7 +123,6 @@ def get_spot_data(target_year, uploaded_bytes=None):
         except Exception:
             continue
 
-    # 3. どうしてもダメな場合のローカルファイルフォールバック（旧仕様互換）
     current_dir = os.path.dirname(__file__)
     file_path = os.path.join(current_dir, f"spot_summary_{target_year}.csv")
     if os.path.exists(file_path):
@@ -132,11 +143,10 @@ selected_area = st.sidebar.selectbox("表示エリア", AREAS, index=2)
 start_date = st.sidebar.date_input("初期表示 開始日", value=datetime.today().date() - timedelta(days=7))
 end_date = st.sidebar.date_input("初期表示 終了日", value=datetime.today().date())
 
-# 【追加】スマホからでも簡単にCSVを指定できるアップローダー
 st.sidebar.markdown("---")
 st.sidebar.subheader("データ取得設定")
 st.sidebar.caption("※通常はJEPX公式サイトから自動取得するため操作不要です。自動取得に失敗する場合のみ、スマホやPCからCSVをアップロードしてください。")
-uploaded_file = st.sidebar.file_uploader("手動アップロード (任意)")
+uploaded_file = st.sidebar.file_uploader("手動アップロード (任意)", type=["csv"])
 
 if start_date <= end_date:
     with st.spinner("市場データを取得中...（ズームアウト用の過去データも含めて読み込んでいます）"):
@@ -156,7 +166,6 @@ if start_date <= end_date:
         if not imb_df.empty:
             imb_df = imb_df[~imb_df.index.duplicated(keep='first')].sort_index()
 
-        # 【変更】ターゲット年（開始日の年）と、アップロードされたファイルのバイトデータを渡す
         target_year = start_dt.year
         uploaded_bytes = uploaded_file.getvalue() if uploaded_file is not None else None
         spot_df = get_spot_data(target_year, uploaded_bytes)
@@ -175,7 +184,7 @@ if start_date <= end_date:
                     rows=2, cols=1, 
                     shared_xaxes=True, 
                     row_heights=[0.7, 0.3],
-                    vertical_spacing=0.05,
+                    vertical_spacing=0.08, # 【修正】上下のチャートの隙間を少し開ける
                     subplot_titles=(f"{selected_area}エリア 価格推移 (円/kWh)", "インバランス・スプレッド (Imbalance - Spot)")
                 )
 
@@ -198,13 +207,20 @@ if start_date <= end_date:
                     opacity=0.8
                 ), row=2, col=1)
 
+                # 【大幅修正】スマホ向けレイアウト調整
                 fig.update_layout(
                     template="plotly_dark",
-                    height=700,
-                    margin=dict(l=40, r=40, t=60, b=40),
+                    height=650, # 少し高さを調整
+                    margin=dict(l=5, r=5, t=90, b=20), # 左右の余白を極限まで削り、上部に余裕をもたせる
                     hovermode="x unified",
                     showlegend=True,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    legend=dict(
+                        orientation="h", 
+                        yanchor="bottom", 
+                        y=1.05,        # 凡例をタイトルより上に引き上げる
+                        xanchor="center", 
+                        x=0.5          # 画面中央に配置
+                    ),
                     dragmode='pan' 
                 )
 
@@ -216,7 +232,7 @@ if start_date <= end_date:
                 )
                 fig.update_xaxes(
                     range=[start_dt, end_dt],
-                    rangeslider=dict(visible=True, thickness=0.05),
+                    rangeslider=dict(visible=True, thickness=0.08), # スライダーを少し太くして触りやすく
                     showgrid=True, gridcolor='#333333',
                     row=2, col=1
                 )
@@ -224,7 +240,8 @@ if start_date <= end_date:
                 fig.update_yaxes(showgrid=True, gridcolor='#333333', row=1, col=1)
                 fig.update_yaxes(showgrid=True, gridcolor='#333333', row=2, col=1)
 
-                st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+                # 【修正】displayModeBar=False を追加してスマホ画面の邪魔なツールバーを非表示にしつつ、ズームを許可
+                st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": False})
                 
                 with st.expander("📊 データの詳細を表示 (読み込み済みの全期間)"):
                     st.dataframe(merged_df.sort_index(ascending=False).drop(columns=['Spread_Color']).style.format("{:.2f}"))
