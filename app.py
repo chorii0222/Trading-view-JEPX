@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
 import io
 import os
@@ -10,7 +11,7 @@ from plotly.subplots import make_subplots
 # --- 設定 ---
 st.set_page_config(page_title="JEPX & Imbalance Market Viewer", layout="wide")
 
-# 【追加】スマホ画面いっぱいに表示するためのCSS
+# スマホ画面いっぱいに表示するためのCSS
 st.markdown("""
     <style>
     /* Streamlitのデフォルトの余白を消して画面幅を最大限使う */
@@ -134,6 +135,16 @@ def get_spot_data(target_year, uploaded_bytes=None):
 
     return None
 
+def calculate_rsi(series, period=14):
+    """RSIを計算する関数"""
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    ema_up = up.ewm(com=period-1, adjust=False).mean()
+    ema_down = down.ewm(com=period-1, adjust=False).mean()
+    rs = ema_up / ema_down
+    return 100 - (100 / (1 + rs))
+
 # --- UI構築 ---
 st.title("📈 Market View: JEPX Spot vs Imbalance")
 st.write("💡 **Tips**: チャート上でドラッグすると左右に移動(パン)できます。二本指でスクロール（ピンチアウト）すると、過去のデータ（最大90日前）までシームレスにズームアウトして確認できます。")
@@ -142,6 +153,44 @@ st.sidebar.header("チャート設定")
 selected_area = st.sidebar.selectbox("表示エリア", AREAS, index=2)
 start_date = st.sidebar.date_input("初期表示 開始日", value=datetime.today().date() - timedelta(days=7))
 end_date = st.sidebar.date_input("初期表示 終了日", value=datetime.today().date())
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("👁️ 表示データの選択")
+show_spot = st.sidebar.checkbox("スポット価格を表示", value=True)
+show_imb = st.sidebar.checkbox("インバランス料金を表示", value=True)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📈 テクニカル指標")
+
+selected_periods = st.sidebar.multiselect(
+    "SMA/EMA/BBの期間 (時間) ※複数選択可",
+    options=[3, 6, 12, 24, 48, 72, 168],
+    default=[24]
+)
+
+st.sidebar.write("【SMA (単純移動平均線)】")
+show_sma_spot = st.sidebar.checkbox("スポット価格のSMA", value=False)
+show_sma_imb = st.sidebar.checkbox("インバランス料金のSMA", value=False)
+
+st.sidebar.write("【EMA (指数平滑移動平均線)】")
+show_ema_spot = st.sidebar.checkbox("スポット価格のEMA", value=False)
+show_ema_imb = st.sidebar.checkbox("インバランス料金のEMA", value=False)
+
+st.sidebar.write("【ボリンジャーバンド (2σ)】")
+show_bb_spot = st.sidebar.checkbox("スポット価格のBB", value=False)
+show_bb_imb = st.sidebar.checkbox("インバランス料金のBB", value=False)
+
+st.sidebar.write("【一目均衡表 (9, 26, 52)】")
+show_ichimoku_spot = st.sidebar.checkbox("スポット価格の一目均衡表", value=False)
+show_ichimoku_imb = st.sidebar.checkbox("インバランス料金の一目均衡表", value=False)
+
+st.sidebar.write("【MACD (12, 26, 9)】")
+show_macd_spot = st.sidebar.checkbox("スポット価格のMACD", value=False)
+show_macd_imb = st.sidebar.checkbox("インバランス料金のMACD", value=False)
+
+st.sidebar.write("【RSI (14)】")
+show_rsi_spot = st.sidebar.checkbox("スポット価格のRSI", value=False)
+show_rsi_imb = st.sidebar.checkbox("インバランス料金のRSI", value=False)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("データ取得設定")
@@ -180,65 +229,188 @@ if start_date <= end_date:
                 merged_df['Spread'] = merged_df['Imbalance'] - merged_df['Spot']
                 merged_df['Spread_Color'] = merged_df['Spread'].apply(lambda x: '#ff4d4d' if x >= 0 else '#00cc96')
 
+                # インジケーターの計算
+                for h in selected_periods:
+                    ma_window_periods = h * 2 
+                    
+                    if show_sma_spot or show_bb_spot:
+                        merged_df[f'Spot_SMA_{h}'] = merged_df['Spot'].rolling(window=ma_window_periods, min_periods=1).mean()
+                    if show_ema_spot:
+                        merged_df[f'Spot_EMA_{h}'] = merged_df['Spot'].ewm(span=ma_window_periods, adjust=False).mean()
+                    if show_bb_spot:
+                        merged_df[f'Spot_STD_{h}'] = merged_df['Spot'].rolling(window=ma_window_periods, min_periods=1).std()
+                        merged_df[f'Spot_BB_Upper_{h}'] = merged_df[f'Spot_SMA_{h}'] + (merged_df[f'Spot_STD_{h}'] * 2)
+                        merged_df[f'Spot_BB_Lower_{h}'] = merged_df[f'Spot_SMA_{h}'] - (merged_df[f'Spot_STD_{h}'] * 2)
+
+                    if show_sma_imb or show_bb_imb:
+                        merged_df[f'Imb_SMA_{h}'] = merged_df['Imbalance'].rolling(window=ma_window_periods, min_periods=1).mean()
+                    if show_ema_imb:
+                        merged_df[f'Imb_EMA_{h}'] = merged_df['Imbalance'].ewm(span=ma_window_periods, adjust=False).mean()
+                    if show_bb_imb:
+                        merged_df[f'Imb_STD_{h}'] = merged_df['Imbalance'].rolling(window=ma_window_periods, min_periods=1).std()
+                        merged_df[f'Imb_BB_Upper_{h}'] = merged_df[f'Imb_SMA_{h}'] + (merged_df[f'Imb_STD_{h}'] * 2)
+                        merged_df[f'Imb_BB_Lower_{h}'] = merged_df[f'Imb_SMA_{h}'] - (merged_df[f'Imb_STD_{h}'] * 2)
+
+                if show_ichimoku_spot:
+                    merged_df['Spot_Tenkan'] = (merged_df['Spot'].rolling(window=9, min_periods=1).max() + merged_df['Spot'].rolling(window=9, min_periods=1).min()) / 2
+                    merged_df['Spot_Kijun'] = (merged_df['Spot'].rolling(window=26, min_periods=1).max() + merged_df['Spot'].rolling(window=26, min_periods=1).min()) / 2
+                    merged_df['Spot_Senkou_A'] = (merged_df['Spot_Tenkan'] + merged_df['Spot_Kijun']) / 2
+                    merged_df['Spot_Senkou_B'] = (merged_df['Spot'].rolling(window=52, min_periods=1).max() + merged_df['Spot'].rolling(window=52, min_periods=1).min()) / 2
+
+                if show_ichimoku_imb:
+                    merged_df['Imb_Tenkan'] = (merged_df['Imbalance'].rolling(window=9, min_periods=1).max() + merged_df['Imbalance'].rolling(window=9, min_periods=1).min()) / 2
+                    merged_df['Imb_Kijun'] = (merged_df['Imbalance'].rolling(window=26, min_periods=1).max() + merged_df['Imbalance'].rolling(window=26, min_periods=1).min()) / 2
+                    merged_df['Imb_Senkou_A'] = (merged_df['Imb_Tenkan'] + merged_df['Imb_Kijun']) / 2
+                    merged_df['Imb_Senkou_B'] = (merged_df['Imbalance'].rolling(window=52, min_periods=1).max() + merged_df['Imbalance'].rolling(window=52, min_periods=1).min()) / 2
+
+                # MACDの計算
+                if show_macd_spot:
+                    merged_df['Spot_MACD_12'] = merged_df['Spot'].ewm(span=12, adjust=False).mean()
+                    merged_df['Spot_MACD_26'] = merged_df['Spot'].ewm(span=26, adjust=False).mean()
+                    merged_df['Spot_MACD'] = merged_df['Spot_MACD_12'] - merged_df['Spot_MACD_26']
+                    merged_df['Spot_MACD_Signal'] = merged_df['Spot_MACD'].ewm(span=9, adjust=False).mean()
+                    merged_df['Spot_MACD_Hist'] = merged_df['Spot_MACD'] - merged_df['Spot_MACD_Signal']
+                
+                if show_macd_imb:
+                    merged_df['Imb_MACD_12'] = merged_df['Imbalance'].ewm(span=12, adjust=False).mean()
+                    merged_df['Imb_MACD_26'] = merged_df['Imbalance'].ewm(span=26, adjust=False).mean()
+                    merged_df['Imb_MACD'] = merged_df['Imb_MACD_12'] - merged_df['Imb_MACD_26']
+                    merged_df['Imb_MACD_Signal'] = merged_df['Imb_MACD'].ewm(span=9, adjust=False).mean()
+                    merged_df['Imb_MACD_Hist'] = merged_df['Imb_MACD'] - merged_df['Imb_MACD_Signal']
+
+                # RSIの計算
+                if show_rsi_spot:
+                    merged_df['Spot_RSI'] = calculate_rsi(merged_df['Spot'], 14)
+                if show_rsi_imb:
+                    merged_df['Imb_RSI'] = calculate_rsi(merged_df['Imbalance'], 14)
+
+                # --- サブプロットの動的レイアウト構成 ---
+                show_macd = show_macd_spot or show_macd_imb
+                show_rsi = show_rsi_spot or show_rsi_imb
+                
+                rows = 2
+                row_heights = [0.6, 0.2] # メインチャートとスプレッド
+                subplot_titles = [f"{selected_area}エリア 価格推移 (円/kWh)", "インバランス・スプレッド (Imbalance - Spot)"]
+                
+                if show_macd:
+                    rows += 1
+                    row_heights.append(0.2)
+                    subplot_titles.append("MACD (12, 26, 9)")
+                if show_rsi:
+                    rows += 1
+                    row_heights.append(0.2)
+                    subplot_titles.append("RSI (14)")
+
+                row_spread = 2
+                row_macd = 3 if show_macd else None
+                row_rsi = (3 if not show_macd else 4) if show_rsi else None
+                
+                # サブプロットの数に応じて全体の高さを調整
+                total_height = 650 + ((rows - 2) * 200)
+
                 fig = make_subplots(
-                    rows=2, cols=1, 
+                    rows=rows, cols=1, 
                     shared_xaxes=True, 
-                    row_heights=[0.7, 0.3],
-                    vertical_spacing=0.08,
-                    subplot_titles=(f"{selected_area}エリア 価格推移 (円/kWh)", "インバランス・スプレッド (Imbalance - Spot)")
+                    row_heights=row_heights,
+                    vertical_spacing=0.06,
+                    subplot_titles=subplot_titles
                 )
 
-                fig.add_trace(go.Scatter(
-                    x=merged_df.index, y=merged_df['Spot'],
-                    name='Spot Price', mode='lines',
-                    line=dict(color='#00cc96', width=2, shape='vh')
-                ), row=1, col=1)
+                dash_styles = ['dot', 'dash', 'dashdot', 'longdash']
 
-                fig.add_trace(go.Scatter(
-                    x=merged_df.index, y=merged_df['Imbalance'],
-                    name='Imbalance Price', mode='lines',
-                    line=dict(color='#ff9900', width=2, shape='vh')
-                ), row=1, col=1)
+                # ーーー メインチャートへの指標描画 ーーー
+                for i, h in enumerate(selected_periods):
+                    d_style = dash_styles[i % len(dash_styles)]
 
-                fig.add_trace(go.Bar(
-                    x=merged_df.index, y=merged_df['Spread'],
-                    name='Spread',
-                    marker_color=merged_df['Spread_Color'],
-                    opacity=0.8
-                ), row=2, col=1)
+                    if show_bb_spot:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Spot_BB_Upper_{h}'], mode='lines', line=dict(color='rgba(0, 204, 150, 0.4)', width=1, dash=d_style), showlegend=False), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Spot_BB_Lower_{h}'], name=f'Spot BB {h}h', mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 150, 0.05)', line=dict(color='rgba(0, 204, 150, 0.4)', width=1, dash=d_style), showlegend=False), row=1, col=1)
+                    if show_sma_spot:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Spot_SMA_{h}'], name=f'Spot SMA {h}h', mode='lines', line=dict(color='#00cc96', width=1.5, dash=d_style)), row=1, col=1)
+                    if show_ema_spot:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Spot_EMA_{h}'], name=f'Spot EMA {h}h', mode='lines', line=dict(color='#66ffcc', width=1.5, dash=d_style)), row=1, col=1)
+
+                    if show_bb_imb:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Imb_BB_Upper_{h}'], mode='lines', line=dict(color='rgba(255, 153, 0, 0.4)', width=1, dash=d_style), showlegend=False), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Imb_BB_Lower_{h}'], name=f'Imb BB {h}h', mode='lines', fill='tonexty', fillcolor='rgba(255, 153, 0, 0.05)', line=dict(color='rgba(255, 153, 0, 0.4)', width=1, dash=d_style), showlegend=False), row=1, col=1)
+                    if show_sma_imb:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Imb_SMA_{h}'], name=f'Imb SMA {h}h', mode='lines', line=dict(color='#ff9900', width=1.5, dash=d_style)), row=1, col=1)
+                    if show_ema_imb:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df[f'Imb_EMA_{h}'], name=f'Imb EMA {h}h', mode='lines', line=dict(color='#ffcc66', width=1.5, dash=d_style)), row=1, col=1)
+
+                future_idx = merged_df.index + pd.Timedelta(minutes=30*26)
+
+                if show_ichimoku_spot:
+                    fig.add_trace(go.Scatter(x=future_idx, y=merged_df['Spot_Senkou_A'], mode='lines', line=dict(color='rgba(0, 204, 150, 0)', width=0), showlegend=False, hoverinfo='skip'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=future_idx, y=merged_df['Spot_Senkou_B'], name='Spot 雲', mode='lines', fill='tonexty', fillcolor='rgba(0, 204, 150, 0.15)', line=dict(color='rgba(0, 204, 150, 0)', width=0)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Spot_Tenkan'], name='Spot 転換線', mode='lines', line=dict(color='#00cc96', width=1)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Spot_Kijun'], name='Spot 基準線', mode='lines', line=dict(color='#00cc96', width=1, dash='dot')), row=1, col=1)
+
+                if show_ichimoku_imb:
+                    fig.add_trace(go.Scatter(x=future_idx, y=merged_df['Imb_Senkou_A'], mode='lines', line=dict(color='rgba(255, 153, 0, 0)', width=0), showlegend=False, hoverinfo='skip'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=future_idx, y=merged_df['Imb_Senkou_B'], name='Imb 雲', mode='lines', fill='tonexty', fillcolor='rgba(255, 153, 0, 0.15)', line=dict(color='rgba(255, 153, 0, 0)', width=0)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Imb_Tenkan'], name='Imb 転換線', mode='lines', line=dict(color='#ff9900', width=1)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Imb_Kijun'], name='Imb 基準線', mode='lines', line=dict(color='#ff9900', width=1, dash='dot')), row=1, col=1)
+
+                if show_spot:
+                    fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Spot'], name='Spot Price', mode='lines', line=dict(color='#00cc96', width=2, shape='vh')), row=1, col=1)
+                if show_imb:
+                    fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Imbalance'], name='Imbalance Price', mode='lines', line=dict(color='#ff9900', width=2, shape='vh')), row=1, col=1)
+
+                # ーーー スプレッド描画 (Row=2) ーーー
+                fig.add_trace(go.Bar(x=merged_df.index, y=merged_df['Spread'], name='Spread', marker_color=merged_df['Spread_Color'], opacity=0.8), row=row_spread, col=1)
+
+                # ーーー MACD描画 (Row=3) ーーー
+                if show_macd:
+                    if show_macd_spot:
+                        spot_macd_colors = ['rgba(0, 204, 150, 0.7)' if val >= 0 else 'rgba(255, 77, 77, 0.7)' for val in merged_df['Spot_MACD_Hist']]
+                        fig.add_trace(go.Bar(x=merged_df.index, y=merged_df['Spot_MACD_Hist'], name='Spot MACD Hist', marker_color=spot_macd_colors), row=row_macd, col=1)
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Spot_MACD'], name='Spot MACD', mode='lines', line=dict(color='#00cc96', width=1.5)), row=row_macd, col=1)
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Spot_MACD_Signal'], name='Spot Signal', mode='lines', line=dict(color='#66ffcc', width=1, dash='dot')), row=row_macd, col=1)
+                    if show_macd_imb:
+                        imb_macd_colors = ['rgba(255, 153, 0, 0.7)' if val >= 0 else 'rgba(255, 77, 77, 0.7)' for val in merged_df['Imb_MACD_Hist']]
+                        fig.add_trace(go.Bar(x=merged_df.index, y=merged_df['Imb_MACD_Hist'], name='Imb MACD Hist', marker_color=imb_macd_colors), row=row_macd, col=1)
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Imb_MACD'], name='Imb MACD', mode='lines', line=dict(color='#ff9900', width=1.5)), row=row_macd, col=1)
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Imb_MACD_Signal'], name='Imb Signal', mode='lines', line=dict(color='#ffcc66', width=1, dash='dot')), row=row_macd, col=1)
+
+                # ーーー RSI描画 (Row=4) ーーー
+                if show_rsi:
+                    if show_rsi_spot:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Spot_RSI'], name='Spot RSI', mode='lines', line=dict(color='#00cc96', width=1.5)), row=row_rsi, col=1)
+                    if show_rsi_imb:
+                        fig.add_trace(go.Scatter(x=merged_df.index, y=merged_df['Imb_RSI'], name='Imb RSI', mode='lines', line=dict(color='#ff9900', width=1.5)), row=row_rsi, col=1)
+                    
+                    # RSIの基準線 (70と30)
+                    fig.add_hline(y=70, line_dash="dash", line_color="gray", line_width=1, row=row_rsi, col=1)
+                    fig.add_hline(y=30, line_dash="dash", line_color="gray", line_width=1, row=row_rsi, col=1)
+                    fig.update_yaxes(range=[0, 100], row=row_rsi, col=1)
 
                 fig.update_layout(
                     template="plotly_dark",
-                    height=650,
+                    height=total_height,
                     margin=dict(l=5, r=5, t=90, b=20),
                     hovermode="x unified",
                     showlegend=True,
-                    legend=dict(
-                        orientation="h", 
-                        yanchor="bottom", 
-                        y=1.05,
-                        xanchor="center", 
-                        x=0.5
-                    ),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5),
                     dragmode='pan' 
                 )
 
-                fig.update_xaxes(
-                    range=[start_dt, end_dt],
-                    rangeslider=dict(visible=False),
-                    showgrid=True, gridcolor='#333333',
-                    row=1, col=1
-                )
-                fig.update_xaxes(
-                    range=[start_dt, end_dt],
-                    rangeslider=dict(visible=True, thickness=0.08),
-                    showgrid=True, gridcolor='#333333',
-                    row=2, col=1
-                )
+                # すべてのX軸設定ループ
+                for r in range(1, rows + 1):
+                    fig.update_xaxes(
+                        range=[start_dt, end_dt],
+                        rangeslider=dict(visible=(r == rows), thickness=0.08), # 一番下のチャートにだけスライダーを表示
+                        showgrid=True, gridcolor='#333333',
+                        row=r, col=1
+                    )
 
-                # 【修正】rangemode="nonnegative" を追加してY軸の最小値を0に固定
+                # Y軸設定 (価格とスプレッドは0以上固定)
                 fig.update_yaxes(rangemode="nonnegative", showgrid=True, gridcolor='#333333', row=1, col=1)
                 fig.update_yaxes(rangemode="nonnegative", showgrid=True, gridcolor='#333333', row=2, col=1)
+                if show_macd:
+                    fig.update_yaxes(showgrid=True, gridcolor='#333333', row=row_macd, col=1)
+                if show_rsi:
+                    fig.update_yaxes(showgrid=True, gridcolor='#333333', row=row_rsi, col=1)
 
                 st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": False})
                 
